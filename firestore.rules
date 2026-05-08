@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} { allow read, write: if false; }
+    
+    function isValidId(id) { 
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { 
+      // Bootstrap the original admin or lookup from DB if exists
+      return isSignedIn() && (request.auth.token.email == 'bheshdadiya@gmail.com' || existing().isAdmin == true || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true);
+    }
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'name', 'freeUses', 'isSubscribed', 'isAdmin', 'createdAt', 'updatedAt']) 
+        && data.email is string && data.email.size() <= 200
+        && data.name is string && data.name.size() <= 100
+        && data.freeUses is number
+        && data.isSubscribed is bool
+        && data.isAdmin is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        // Optional fields
+        && (data.keys().hasAny(['photo']) ? (data.photo is string && data.photo.size() <= 1000) : true)
+        && (data.keys().hasAny(['mobile']) ? (data.mobile is string && data.mobile.size() <= 20) : true)
+        && (data.keys().hasAny(['lastFreeUseAt']) ? data.lastFreeUseAt is number : true)
+        && (data.keys().hasAny(['subscriptionExpiresAt']) ? data.subscriptionExpiresAt is number : true);
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() 
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && request.auth.token.email_verified == true
+        && isValidUser(incoming())
+        && incoming().email == request.auth.token.email
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (!incoming().isAdmin || request.auth.token.email == 'bheshdadiya@gmail.com');
+      allow update: if isSignedIn() 
+        && isValidId(userId)
+        && isValidUser(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().createdAt == existing().createdAt
+        && incoming().email == existing().email
+        && (
+          isAdmin() || 
+          (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photo', 'mobile', 'freeUses', 'lastFreeUseAt', 'updatedAt']) && incoming().isAdmin == existing().isAdmin && incoming().isSubscribed == existing().isSubscribed)
+        );
+      allow list: if isAdmin();
+    }
+    
+    function isValidPost(data) {
+      return data.keys().hasAll(['title', 'content', 'authorId', 'createdAt', 'updatedAt'])
+        && data.title is string && data.title.size() <= 200
+        && data.content is string && data.content.size() <= 50000
+        && data.authorId is string && data.authorId.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && (data.keys().hasAny(['imageUrl']) ? (data.imageUrl is string && data.imageUrl.size() <= 2000) : true);
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isAdmin() 
+        && isValidId(postId)
+        && isValidPost(incoming())
+        && incoming().authorId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin() 
+        && isValidId(postId)
+        && isValidPost(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().createdAt == existing().createdAt
+        && incoming().authorId == existing().authorId;
+      allow delete: if isAdmin();
+      allow list: if true;
+    }
+  }
+}

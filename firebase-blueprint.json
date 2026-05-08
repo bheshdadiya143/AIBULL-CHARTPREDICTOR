@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "user": {
+      "title": "User",
+      "description": "A user of the application",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "photo": { "type": "string" },
+        "mobile": { "type": "string" },
+        "freeUses": { "type": "number" },
+        "isSubscribed": { "type": "boolean" },
+        "isAdmin": { "type": "boolean" },
+        "lastFreeUseAt": { "type": "number" },
+        "subscriptionExpiresAt": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["email", "name", "freeUses", "isSubscribed", "isAdmin", "createdAt", "updatedAt"]
+    },
+    "post": {
+      "title": "Blog Post",
+      "description": "Educational blog posts",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "authorId": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["title", "content", "authorId", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/user" },
+      "description": "Stores user profiles"
+    },
+    "posts/{postId}": {
+      "schema": { "$ref": "#/entities/post" },
+      "description": "Stores blog posts created by admins"
+    }
+  }
+}

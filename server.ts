@@ -15,10 +15,10 @@ async function startServer() {
   // API: Forex Factory News Proxy
   app.get("/api/forex-news", async (req, res) => {
     try {
-      const response = await fetch("https://www.forexfactory.com/ff_calendar_thisweek.xml", {
+      const response = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "text/xml,application/xml,application/xhtml+xml",
+          "Accept": "application/json",
           "Accept-Language": "en-US,en;q=0.9",
           "Cache-Control": "no-cache",
           "Pragma": "no-cache"
@@ -27,19 +27,29 @@ async function startServer() {
       
       if (!response.ok) {
         console.error(`Forex Factory Error: ${response.status} ${response.statusText}`);
-        // Fallback or empty data
         return res.json([]);
       }
 
-      const xml = await response.text();
-      parser.parseString(xml, (err, result) => {
-        if (err) {
-          console.error("XML Parse Error:", err);
-          return res.json([]);
-        }
-        const events = result?.weeklyevents?.event || [];
-        res.json(Array.isArray(events) ? events : [events]);
-      });
+      let events = await response.json();
+      
+      // format for frontend since json has 'date' instead of 'time'
+      if (Array.isArray(events)) {
+         events = events.map((e: any) => {
+           let timeStr = "";
+           try {
+             if (e.date) {
+               const d = new Date(e.date);
+               timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+             }
+           } catch(err) {}
+           return {
+             ...e,
+             time: timeStr || "All Day"
+           };
+         });
+      }
+
+      res.json(Array.isArray(events) ? events : []);
     } catch (error) {
       console.error("Forex News Request Failed:", error);
       res.json([]); 

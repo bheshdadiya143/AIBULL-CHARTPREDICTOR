@@ -22,7 +22,8 @@ import {
   User as UserIcon,
   MessageCircle,
   ThumbsUp,
-  ThumbsDown
+  ThumbsDown,
+  Settings
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -39,6 +40,9 @@ import {
   Cell
 } from "recharts";
 import { analyzeChartImage, ChartAnalysis } from "./services/geminiService";
+import { auth, db } from "./firebase";
+import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { cn } from "./lib/utils";
 
 // Sub-components
@@ -46,8 +50,12 @@ import MarketNews from "./components/MarketNews";
 import BlogSection from "./components/BlogSection";
 import Billing from "./components/Billing";
 import ShareModal from "./components/ShareModal";
+import AdminPanel from "./components/AdminPanel";
 
-// UI Constants for 'AI Bull Chart Predictor' Aesthetic
+import Profile from "./components/Profile";
+
+type Tab = "analysis" | "updates" | "education" | "billing" | "admin" | "profile";
+
 const COLORS_PRO = {
   bg: "#05070a",
   panel: "rgba(255, 255, 255, 0.05)",
@@ -73,8 +81,6 @@ const BullLogo = ({ className }: { className?: string }) => (
     <path d="M12 21L10 18H14L12 21Z" />
   </svg>
 );
-
-type Tab = "analysis" | "updates" | "education" | "billing";
 
 // Candlestick Component
 const Candlestick = (props: any) => {
@@ -113,7 +119,6 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [isMobileModalOpen, setIsMobileModalOpen] = useState(false);
   const [isShareUnlockOpen, setIsShareUnlockOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isDisclaimerOpen, setIsDisclaimerOpen] = useState(() => {
@@ -123,6 +128,7 @@ export default function App() {
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [feedback, setFeedback] = useState<{ rating: 'accurate' | 'inaccurate' | null, submitted: boolean }>({ rating: null, submitted: false });
   const [user, setUser] = useState<{ 
+    uid: string;
     name: string; 
     email: string; 
     photo: string; 
@@ -130,21 +136,70 @@ export default function App() {
     freeUses: number;
     lastFreeUseAt?: number;
     isSubscribed?: boolean;
-  } | null>(() => {
-    const saved = localStorage.getItem("aibull_user");
-    return saved ? JSON.parse(saved) : null;
-  });
+    isAdmin?: boolean;
+  } | null>(null);
   
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Persistence
+  // Persistence and Firebase Auth
   useEffect(() => {
-    if (user) {
-      localStorage.setItem("aibull_user", JSON.stringify(user));
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Fetch user document from Firestore
+        try {
+          const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            let isSubscribed = data.isSubscribed;
+            if (isSubscribed && data.subscriptionExpiresAt && data.subscriptionExpiresAt < Date.now()) {
+               isSubscribed = false;
+               // Inform user on next action or silently let them revert
+            }
+            setUser({ uid: firebaseUser.uid, ...data, isSubscribed } as any);
+          } else {
+                        const newUser = {
+               name: firebaseUser.displayName || 'Trader',
+               email: firebaseUser.email || '',
+               photo: firebaseUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${firebaseUser.uid}`,
+               freeUses: 1,
+               isSubscribed: false,
+               isAdmin: firebaseUser.email === 'bheshdadiya@gmail.com', // Bootstrap admin
+               createdAt: serverTimestamp(),
+               updatedAt: serverTimestamp()
+             };
+             await setDoc(doc(db, "users", firebaseUser.uid), newUser);
+             setUser({ uid: firebaseUser.uid, ...newUser } as any);
+          }
+        } catch (e) {
+          console.error("Error fetching user data", e);
+        }
+      } else {
+        setUser(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async (method: 'google' | 'email') => {
+    if (method === 'google') {
+       try {
+         const provider = new GoogleAuthProvider();
+         await signInWithPopup(auth, provider);
+         setIsAuthOpen(false);
+       } catch (e) {
+         console.error(e);
+         alert("Failed to login with Google");
+       }
     } else {
-      localStorage.removeItem("aibull_user");
+      alert("Email authentication not yet implemented. Please use Google.");
     }
-  }, [user]);
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setUser(null);
+  };
 
   // Sync theme with body
   useEffect(() => {
@@ -153,32 +208,7 @@ export default function App() {
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
-  const handleLogin = (method: 'google' | 'email') => {
-    // Simulating login (using real auth would involve firebase/auth)
-    const newUser = {
-      name: "Institutional Trader",
-      email: "trader@pro.com",
-      photo: `https://api.dicebear.com/7.x/avataaars/svg?seed=${Date.now()}`,
-      freeUses: 1,
-      isSubscribed: false
-    };
-    setUser(newUser);
-    localStorage.setItem("aibull_user", JSON.stringify(newUser));
-    setIsAuthOpen(false);
-  };
-
-  const handleLogout = () => setUser(null);
-
-  const handleMobileSubmit = (mobile: string) => {
-    if (user) {
-      const updatedUser = { ...user, mobile, freeUses: user.freeUses + 1 };
-      setUser(updatedUser);
-      localStorage.setItem("aibull_user", JSON.stringify(updatedUser));
-      setIsMobileModalOpen(false);
-    }
-  };
-
-  const handleShareToUnlock = () => {
+  const handleShareToUnlock = async () => {
     if (!user) return;
     
     // Construct WhatsApp share link
@@ -189,13 +219,17 @@ export default function App() {
     window.open(whatsappUrl, '_blank');
     
     // Grant the free use (Mocking share validation as per standard web browser limitations)
-    const updatedUser = { 
-      ...user, 
-      freeUses: user.freeUses + 1,
-      lastFreeUseAt: Date.now() 
-    };
-    setUser(updatedUser);
-    setIsShareUnlockOpen(false);
+    try {
+      const userRef = doc(db, 'users', user.uid);
+      await updateDoc(userRef, { freeUses: user.freeUses + 1, lastFreeUseAt: Date.now(), updatedAt: serverTimestamp() });
+      const updatedUser = { 
+        ...user, 
+        freeUses: user.freeUses + 1,
+        lastFreeUseAt: Date.now() 
+      };
+      setUser(updatedUser);
+      setIsShareUnlockOpen(false);
+    } catch (e) { console.error(e); }
   };
 
   const handlePurchaseInitiated = (tierId: string) => {
@@ -210,16 +244,40 @@ export default function App() {
   const handleConfirmPayment = () => {
     setIsProcessingPayment(true);
     // Simulate secure verification delay
-    setTimeout(() => {
+    setTimeout(async () => {
       if (user) {
-        const updatedUser = { ...user, isSubscribed: true };
-        setUser(updatedUser);
-        localStorage.setItem("aibull_user", JSON.stringify(updatedUser));
+        try {
+          const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+          const userRef = doc(db, 'users', user.uid);
+          await updateDoc(userRef, { isSubscribed: true, subscriptionExpiresAt: expiresAt, updatedAt: serverTimestamp() });
+          const updatedUser = { ...user, isSubscribed: true, subscriptionExpiresAt: expiresAt };
+          setUser(updatedUser);
+        } catch (e) { console.error(e); }
       }
       setIsProcessingPayment(false);
       setIsPaymentModalOpen(false);
       alert("Terminal Subscription Activated Successfully!");
     }, 2500);
+  };
+
+  const handleCancelSubscription = async () => {
+    if (window.confirm("Are you sure you want to cancel your subscription? You will lose terminal access.")) {
+      if (user) {
+        try {
+          const userRef = doc(db, 'users', user.uid);
+          await updateDoc(userRef, {
+            isSubscribed: false,
+            subscriptionExpiresAt: 0,
+            updatedAt: serverTimestamp()
+          });
+          setUser({ ...user, isSubscribed: false, subscriptionExpiresAt: 0 });
+          alert("Subscription cancelled.");
+        } catch (error) {
+          console.error("Error cancelling subscription:", error);
+          alert("Failed to cancel subscription.");
+        }
+      }
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -229,7 +287,6 @@ export default function App() {
       reader.onloadend = () => {
         const base64String = reader.result as string;
         setImage(base64String);
-        performAnalysis(base64String);
       };
       reader.readAsDataURL(file);
     }
@@ -250,7 +307,8 @@ export default function App() {
         setIsShareUnlockOpen(true);
       } else {
         if (!user.mobile) {
-          setIsMobileModalOpen(true);
+          // This should never happen now as it's strictly enforced, but fallback
+          setActiveTab("billing");
         } else {
           setActiveTab("billing");
         }
@@ -291,12 +349,16 @@ export default function App() {
       }
       // ---------------------------------
       if (!user.isSubscribed) {
-        const updatedUser = { 
-          ...user, 
-          freeUses: Math.max(0, user.freeUses - 1),
-          lastFreeUseAt: Date.now() 
-        };
-        setUser(updatedUser);
+        try {
+          const userRef = doc(db, 'users', user.uid);
+          await updateDoc(userRef, { freeUses: Math.max(0, user.freeUses - 1), lastFreeUseAt: Date.now(), updatedAt: serverTimestamp() });
+          const updatedUser = { 
+            ...user, 
+            freeUses: Math.max(0, user.freeUses - 1),
+            lastFreeUseAt: Date.now() 
+          };
+          setUser(updatedUser);
+        } catch (e) { console.error(e); }
       }
     } catch (err: any) {
       setError(err.message || "Something went wrong during analysis.");
@@ -575,28 +637,38 @@ export default function App() {
 
       {/* Mobile Collection Modal */}
       <AnimatePresence>
-        {isMobileModalOpen && (
-          <div className="fixed inset-0 z-[201] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+        {(user && !user.mobile) && (
+          <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
             <form 
-              onSubmit={(e) => { e.preventDefault(); handleMobileSubmit((e.target as any).mobile.value); }}
-              className="bg-[#0F1115] border border-white/10 p-8 rounded-2xl max-w-sm w-full text-center space-y-6"
+              onSubmit={async (e) => { 
+                e.preventDefault(); 
+                const mobile = (e.target as any).mobile.value;
+                if (user) {
+                  try {
+                    const userRef = doc(db, 'users', user.uid);
+                    await updateDoc(userRef, { mobile, updatedAt: serverTimestamp() });
+                    setUser({ ...user, mobile });
+                  } catch (err) { console.error(err); }
+                }
+              }}
+              className="bg-[#0F1115] border border-white/10 p-8 rounded-2xl max-w-sm w-full text-center space-y-6 shadow-2xl relative"
             >
               <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto text-blue-500">
                 <Activity className="w-8 h-8" />
               </div>
               <div className="space-y-2">
-                <h2 className="text-xl font-bold uppercase text-white">Unlock Free Analysis</h2>
-                <p className="text-xs text-slate-500">Verify your mobile number to get 1 extra free professional session.</p>
+                <h2 className="text-xl font-bold uppercase text-white">Mobile Verification Required</h2>
+                <p className="text-xs text-slate-500">You must provide your mobile number before you can continue using the application.</p>
               </div>
               <input 
                 name="mobile" required placeholder="+1 (555) 000-0000"
-                className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-3 text-center text-sm focus:outline-none focus:border-green-500 text-white"
+                className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-3 text-center text-sm focus:outline-none focus:border-blue-500 text-white"
               />
               <button 
                 type="submit"
-                className="w-full py-3 bg-green-600 text-white font-bold uppercase text-[11px] rounded-lg hover:bg-green-500 transition-all"
+                className="w-full py-3 bg-blue-600 text-white font-bold uppercase text-[11px] rounded-lg hover:bg-blue-500 transition-all"
               >
-                Claim Free Session
+                Verify & Continue
               </button>
             </form>
           </div>
@@ -624,6 +696,9 @@ export default function App() {
           <NavItem icon={Maximize2} tab="education" label="Education" />
           <NavItem icon={Newspaper} tab="updates" label="Updates" />
           <NavItem icon={CreditCard} tab="billing" label="Plans" />
+          {user?.isAdmin && (
+            <NavItem icon={Settings} tab="admin" label="Admin" />
+          )}
         </nav>
         
         <div className="flex items-center gap-3">
@@ -638,10 +713,15 @@ export default function App() {
             <div className="flex items-center gap-3 pl-3 border-l border-white/10">
               <div className="flex flex-col items-end hidden lg:flex">
                 <span className="text-[10px] font-bold uppercase">{user.name}</span>
-                <span className="text-[9px] text-green-500 uppercase tracking-tighter font-bold">UPLINK ACTIVE</span>
+                <span className={`text-[9px] uppercase tracking-tighter font-bold ${user.isSubscribed ? 'text-green-500' : 'text-slate-400'}`}>
+                  {user.isSubscribed ? 'PRO ACTIVE' : 'FREE MODE'}
+                </span>
               </div>
-              <img src={user.photo} alt="User" className="w-8 h-8 rounded-full border border-green-500/50" />
-              <button onClick={handleLogout} className="p-2 hover:text-red-400 transition-colors">
+              <img src={user.photo} alt="User" className={`w-8 h-8 rounded-full border ${user.isSubscribed ? 'border-green-500/50' : 'border-slate-500/50'}`} />
+              <button onClick={() => setActiveTab('profile')} className="p-2 hover:text-blue-400 transition-colors" title="Account Settings">
+                <Settings className="w-4 h-4" />
+              </button>
+              <button onClick={handleLogout} className="p-2 hover:text-red-400 transition-colors" title="Log Out">
                 <LogOut className="w-4 h-4" />
               </button>
             </div>
@@ -713,6 +793,16 @@ export default function App() {
                   )}
                   <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept="image/*" />
                 </section>
+                
+                {image && !isAnalyzing && (
+                  <button 
+                    onClick={() => performAnalysis(image)}
+                    className="w-full py-4 bg-blue-600 text-white font-black uppercase text-sm rounded-xl hover:bg-blue-500 transition-all shadow-[0_4px_20px_rgba(59,130,246,0.3)] group flex items-center justify-center gap-2"
+                  >
+                    <RefreshCw className="w-5 h-5 group-hover:rotate-180 transition-transform duration-500" />
+                    Execute AI Analysis
+                  </button>
+                )}
 
                 <div className="flex-1 bg-white/5 border rounded-xl p-5 shadow-2xl relative" style={{ borderColor: colors.border }}>
                   {isAnalyzing ? (
@@ -944,6 +1034,17 @@ export default function App() {
           {activeTab === "education" && <BlogSection />}
 
           {activeTab === "billing" && <Billing onPurchase={handlePurchaseInitiated} />}
+          
+          {activeTab === "profile" && user && (
+            <Profile 
+              user={user} 
+              onUpdateUser={(data) => setUser({ ...user, ...data })} 
+              onCancelSubscription={handleCancelSubscription}
+              onUpgradeClick={() => setActiveTab("billing")} 
+            />
+          )}
+
+          {activeTab === "admin" && user?.isAdmin && <AdminPanel user={user} />}
             </>
           )}
         </AnimatePresence>
