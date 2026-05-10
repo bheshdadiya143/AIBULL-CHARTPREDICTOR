@@ -32,6 +32,21 @@
         "updatedAt": { "type": "number" }
       },
       "required": ["title", "content", "authorId", "createdAt", "updatedAt"]
+    },
+    "report": {
+      "title": "Content Report",
+      "description": "User reports for objectionable content",
+      "type": "object",
+      "properties": {
+        "reporterId": { "type": "string" },
+        "contentId": { "type": "string" },
+        "contentType": { "type": "string" },
+        "reason": { "type": "string" },
+        "details": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "reviewed", "resolved"] }
+      },
+      "required": ["reporterId", "reason", "createdAt", "status"]
     }
   },
   "firestore": {
@@ -42,6 +57,10 @@
     "posts/{postId}": {
       "schema": { "$ref": "#/entities/post" },
       "description": "Stores blog posts created by admins"
+    },
+    "reports/{reportId}": {
+      "schema": { "$ref": "#/entities/report" },
+      "description": "Stores content reports"
     }
   }
 }

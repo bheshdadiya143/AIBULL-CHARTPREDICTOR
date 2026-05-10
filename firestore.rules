@@ -81,5 +81,26 @@ service cloud.firestore {
       allow delete: if isAdmin();
       allow list: if true;
     }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['reporterId', 'reason', 'createdAt', 'status'])
+        && data.reporterId is string && data.reporterId.size() <= 128
+        && data.reason is string && data.reason.size() <= 500
+        && data.status in ['pending', 'reviewed', 'resolved']
+        && data.createdAt is timestamp
+        && (data.keys().hasAny(['contentId']) ? (data.contentId is string && data.contentId.size() <= 128) : true)
+        && (data.keys().hasAny(['contentType']) ? (data.contentType is string && data.contentType.size() <= 50) : true)
+        && (data.keys().hasAny(['details']) ? (data.details is string && data.details.size() <= 2000) : true);
+    }
+
+    match /reports/{reportId} {
+      allow create: if isSignedIn() 
+        && isValidId(reportId)
+        && incoming().reporterId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && isValidReport(incoming());
+      allow read, list, update, delete: if isAdmin();
+    }
   }
 }

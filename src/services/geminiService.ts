@@ -1,6 +1,25 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+const safetySettings = [
+  {
+    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+  },
+];
 
 export interface ChartAnalysis {
   chartType: string;
@@ -16,6 +35,7 @@ export interface ChartAnalysis {
   marketStructure: "Bullish" | "Bearish" | "Consolidation";
   institutionalBias: string;
   strategyName: string;
+  instrumentSymbol?: string; // e.g. BINANCE:BTCUSD, OANDA:EURUSD, NASDAQ:AAPL
   patterns: string[];
   keyLevels: {
     support: number[];
@@ -54,6 +74,7 @@ const responseSchema = {
     marketStructure: { type: Type.STRING, enum: ["Bullish", "Bearish", "Consolidation"] },
     institutionalBias: { type: Type.STRING },
     strategyName: { type: Type.STRING },
+    instrumentSymbol: { type: Type.STRING },
     indicators: {
       type: Type.OBJECT,
       properties: {
@@ -107,26 +128,28 @@ const responseSchema = {
   required: ["chartType", "trend", "prediction", "simulatedData", "patterns", "conceptsUsed", "marketStructure", "institutionalBias", "strategyName"],
 };
 
-export async function analyzeChartImage(base64Image: string): Promise<ChartAnalysis> {
+export async function analyzeChartImage(base64Image: string, requestedTimeframe: string = "1H"): Promise<ChartAnalysis> {
   // Remove data:image/xxx;base64, prefix if present
   const data = base64Image.split(",")[1] || base64Image;
 
-  const response = await ai.models.generateContent({
+  const response = await (ai as any).models.generateContent({
     model: "gemini-3-flash-preview",
     contents: [
       {
         parts: [
           {
             text: `Act as a Senior Institutional Analyst specializing in SMC (Smart Money Concepts) and ICT. 
-            Analyze the provided chart image with extreme precision and strict adherence to technical logic.
+            Analyze the provided chart image for the ${requestedTimeframe} timeframe with extreme precision and strict adherence to technical logic.
             
             Deterministic Rules:
-            1. STRUCTURE: Identify if current price action shows BoS (Break of Structure) or CHoCH (Change of Character).
-            2. BIAS: Synthesize Timeframe, Structure, and Liquidity (Buy-side/Sell-side pools) to form a definite 'Institutional Bias'.
-            3. KEY LEVELS: Locate high-probability Order Blocks (OB) and Fair Value Gaps (FVG).
-            4. SETUP: Propose a trade with a strictly calculated Risk/Reward ratio (Target - Entry) / (Entry - StopLoss). MINIMUM RISK/REWARD RATIO MUST BE 1:3. IF SETUPS ARE LOWER, FIND A MORE AGGRESSIVE TARGET OR TIGHTER STOP LOSS BASED ON SMC CONCEPTS.
-            5. CONSISTENCY: Use mathematical averages and clear pivot points visible in the image to determine 'entry' and 'levels'.
-            6. OHLC DATA: Generate 20 data points. Points 1-10 MUST approximate the exact prices seen in the image. Points 11-20 must chart the most logical path towards the 'Target' or 'StopLoss'.
+            1. TIMEFRAME CONTEXT: This analysis is specifically for the ${requestedTimeframe} timeframe. Adjust point frequency and level significance accordingly.
+            2. STRUCTURE: Identify if current price action shows BoS (Break of Structure) or CHoCH (Change of Character).
+            3. BIAS: Synthesize Timeframe, Structure, and Liquidity (Buy-side/Sell-side pools) to form a definite 'Institutional Bias'.
+            4. KEY LEVELS: Locate high-probability Order Blocks (OB) and Fair Value Gaps (FVG).
+            5. SETUP: Propose a trade with a strictly calculated Risk/Reward ratio (Target - Entry) / (Entry - StopLoss). MINIMUM RISK/REWARD RATIO MUST BE 1:3. IF SETUPS ARE LOWER, FIND A MORE AGGRESSIVE TARGET OR TIGHTER STOP LOSS BASED ON SMC CONCEPTS.
+            6. CONSISTENCY: Use mathematical averages and clear pivot points visible in the image to determine 'entry' and 'levels'.
+            7. OHLC DATA: Generate 20 data points. Points 1-10 MUST approximate the exact prices seen in the image. Points 11-20 must chart the most logical path towards the 'Target' or 'StopLoss'.
+            8. SYMBOL DETECTION: Identify the instrument shown in the chart. Try to provide the TradingView symbol format if possible (e.g., BINANCE:BTCUSDT, OANDA:EURUSD, NASDAQ:AAPL, NSE:RELIANCE).
             
             Format: Use professional trading terminology. Ensure 'rationale' explains the setup via the 'Institutional Bias' and 'Market Structure' identified.`,
           },
@@ -143,6 +166,7 @@ export async function analyzeChartImage(base64Image: string): Promise<ChartAnaly
       responseMimeType: "application/json",
       responseSchema: responseSchema as any,
     },
+    safetySettings,
   });
 
   if (!response.text) {

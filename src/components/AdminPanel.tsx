@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, getDocs, doc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Users, FileText, CheckCircle, Database } from 'lucide-react';
+import { collection, getDocs, doc, updateDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
+import { Users, FileText, CheckCircle, Database, ShieldAlert, Trash2 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { cn } from '../lib/utils';
 
 export default function AdminPanel({ user }: { user: any }) {
   const [users, setUsers] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'blogs'>('users');
+  const [reports, setReports] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'users' | 'blogs' | 'reports'>('users');
   
   // Edit User Modal
   const [editingUser, setEditingUser] = useState<any>(null);
@@ -22,6 +24,8 @@ export default function AdminPanel({ user }: { user: any }) {
   useEffect(() => {
     if (activeTab === 'users') {
       fetchUsers();
+    } else if (activeTab === 'reports') {
+      fetchReports();
     }
   }, [activeTab]);
 
@@ -32,6 +36,35 @@ export default function AdminPanel({ user }: { user: any }) {
       setUsers(data);
     } catch (e) {
       handleFirestoreError(e, OperationType.GET, "users");
+    }
+  };
+
+  const fetchReports = async () => {
+    try {
+      const snap = await getDocs(collection(db, "reports"));
+      const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      setReports(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, "reports");
+    }
+  };
+
+  const handleResolveReport = async (reportId: string) => {
+    try {
+      await updateDoc(doc(db, "reports", reportId), { status: "resolved" });
+      fetchReports();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `reports/${reportId}`);
+    }
+  };
+
+  const handleDeleteReport = async (reportId: string) => {
+    if (!confirm("Are you sure you want to delete this report record?")) return;
+    try {
+      await deleteDoc(doc(db, "reports", reportId));
+      fetchReports();
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `reports/${reportId}`);
     }
   };
 
@@ -110,6 +143,18 @@ export default function AdminPanel({ user }: { user: any }) {
         >
           <FileText className="w-4 h-4 inline-block mr-2" /> Post Blog
         </button>
+        <button 
+          onClick={() => setActiveTab('reports')}
+          className={`px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'reports' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+        >
+          <ShieldAlert className="w-4 h-4 inline-block mr-2" /> 
+          Reports 
+          {reports.filter(r => r.status === 'pending').length > 0 && (
+            <span className="ml-2 bg-red-500 text-white text-[10px] px-1.5 rounded-full">
+              {reports.filter(r => r.status === 'pending').length}
+            </span>
+          )}
+        </button>
       </div>
 
       {activeTab === 'users' && (
@@ -186,6 +231,69 @@ export default function AdminPanel({ user }: { user: any }) {
              {isPosting ? 'Publishing...' : 'Publish Blog Post'}
            </button>
         </motion.form>
+      )}
+
+      {activeTab === 'reports' && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+          <div className="bg-[#0F1115] border border-white/10 rounded-xl overflow-x-auto">
+            <table className="w-full text-left text-sm text-slate-300">
+              <thead className="bg-white/5 text-xs uppercase text-slate-400 font-bold border-b border-white/10">
+                <tr>
+                  <th className="px-6 py-3">Reported By</th>
+                  <th className="px-6 py-3">Reason / Details</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {reports.map((r) => (
+                  <tr key={r.id} className="hover:bg-white/5 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="text-white font-mono text-xs">{r.reporterId}</div>
+                      <div className="text-[10px] text-slate-500">{new Date(r.createdAt?.seconds * 1000).toLocaleString() || "N/A"}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="font-bold text-red-400 text-xs uppercase">{r.reason}</div>
+                      <div className="text-xs text-slate-400 mt-1 max-w-xs">{r.details || "No additional details."}</div>
+                      <div className="text-[10px] text-slate-600 mt-1 italic">Type: {r.contentType} // ID: {r.contentId}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={cn(
+                        "px-2 py-1 rounded text-[10px] font-bold uppercase",
+                        r.status === 'pending' ? 'bg-amber-500/10 text-amber-500' : 'bg-green-500/10 text-green-500'
+                      )}>
+                        {r.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right space-x-2">
+                      {r.status === 'pending' && (
+                        <button 
+                          onClick={() => handleResolveReport(r.id)}
+                          className="p-2 bg-green-500/20 text-green-500 rounded hover:bg-green-500/40"
+                          title="Mark as Resolved"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button 
+                        onClick={() => handleDeleteReport(r.id)}
+                        className="p-2 bg-red-500/20 text-red-500 rounded hover:bg-red-500/40"
+                        title="Delete Report"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {reports.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-slate-500 italic">No reports found.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </motion.div>
       )}
 
       {editingUser && (

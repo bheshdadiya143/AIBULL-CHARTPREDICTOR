@@ -13,8 +13,16 @@ async function startServer() {
   app.use(express.json());
 
   // API: Forex Factory News Proxy
+  let cachedForexNews: any = null;
+  let lastForexNewsFetch = 0;
+
   app.get("/api/forex-news", async (req, res) => {
     try {
+      const now = Date.now();
+      if (cachedForexNews && now - lastForexNewsFetch < 3600000) { // 1 hour cache
+        return res.json(cachedForexNews);
+      }
+
       const response = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -27,6 +35,9 @@ async function startServer() {
       
       if (!response.ok) {
         console.error(`Forex Factory Error: ${response.status} ${response.statusText}`);
+        if (cachedForexNews) {
+           return res.json(cachedForexNews);
+        }
         return res.json([]);
       }
 
@@ -49,9 +60,14 @@ async function startServer() {
          });
       }
 
-      res.json(Array.isArray(events) ? events : []);
+      cachedForexNews = Array.isArray(events) ? events : [];
+      lastForexNewsFetch = now;
+      res.json(cachedForexNews);
     } catch (error) {
       console.error("Forex News Request Failed:", error);
+      if (cachedForexNews) {
+         return res.json(cachedForexNews);
+      }
       res.json([]); 
     }
   });
