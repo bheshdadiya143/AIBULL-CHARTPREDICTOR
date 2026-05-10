@@ -11,6 +11,7 @@
         "mobile": { "type": "string" },
         "freeUses": { "type": "number" },
         "isSubscribed": { "type": "boolean" },
+        "planId": { "type": "string" },
         "isAdmin": { "type": "boolean" },
         "lastFreeUseAt": { "type": "number" },
         "subscriptionExpiresAt": { "type": "number" },

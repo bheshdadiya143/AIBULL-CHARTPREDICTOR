@@ -45,6 +45,7 @@ import {
 import { AdvancedRealTimeChart } from "react-ts-tradingview-widgets";
 import { analyzeChartImage, ChartAnalysis } from "./services/geminiService";
 import { auth, db } from "./firebase";
+import { BillingService } from "./services/billingService";
 import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
 import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection } from "firebase/firestore";
 import { cn } from "./lib/utils";
@@ -321,23 +322,40 @@ export default function App() {
     setIsPaymentModalOpen(true);
   };
 
-  const handleConfirmPayment = () => {
+  const handleConfirmPayment = async () => {
+    if (!user || !selectedTier) return;
+    
     setIsProcessingPayment(true);
-    // Simulate secure verification delay
-    setTimeout(async () => {
-      if (user) {
-        try {
-          const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
-          const userRef = doc(db, 'users', user.uid);
-          await updateDoc(userRef, { isSubscribed: true, subscriptionExpiresAt: expiresAt, updatedAt: serverTimestamp() });
-          const updatedUser = { ...user, isSubscribed: true, subscriptionExpiresAt: expiresAt };
-          setUser(updatedUser);
-        } catch (e) { console.error(e); }
+    
+    try {
+      // 1. Trigger Real Google Play Billing Pop-up
+      const purchaseResult = await BillingService.purchaseTier(selectedTier, user.uid);
+      
+      if (purchaseResult.success && purchaseResult.token) {
+        // 2. Persist to Firestore (Success Flow)
+        const updatedSubscription = await BillingService.activateSubscriptionInFirestore(
+          user.uid, 
+          selectedTier, 
+          purchaseResult.token
+        );
+        
+        // 3. Update Local State
+        setUser({ 
+          ...user, 
+          ...updatedSubscription 
+        });
+
+        setIsPaymentModalOpen(false);
+        alert(`Institutional Access Activated: ${selectedTier.toUpperCase()} Plan Unlocked!`);
+      } else {
+        alert(`Payment Failed: ${purchaseResult.error || 'Transaction cancelled'}`);
       }
+    } catch (error: any) {
+      console.error("Payment Flow Error:", error);
+      alert("Billing System Error. Please check your Google Play connectivity.");
+    } finally {
       setIsProcessingPayment(false);
-      setIsPaymentModalOpen(false);
-      alert("Terminal Subscription Activated Successfully!");
-    }, 2500);
+    }
   };
 
   const handleCancelSubscription = async () => {
@@ -611,7 +629,19 @@ export default function App() {
                   <div className="text-center space-y-2">
                     <p className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Transaction Security: 256-BIT SSL</p>
                     <h3 className="text-2xl font-bold text-white uppercase">Secure Checkout</h3>
-                    <p className="text-xs text-slate-400">Total Due: <span className="text-white font-bold">$29.00 - $249.00</span></p>
+                    <div className="flex flex-col items-center gap-1">
+                      <p className="text-[10px] text-blue-400 font-bold uppercase tracking-widest bg-blue-500/10 px-2 py-0.5 rounded">
+                        {selectedTier?.toUpperCase()} Plan
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Final Amount: <span className="text-white font-bold">
+                          {selectedTier === 'monthly' ? '$49.00' : 
+                           selectedTier === '3-months' ? '$75.00' : 
+                           selectedTier === '6-months' ? '$139.00' : 
+                           selectedTier === 'yearly' ? '$249.00' : '$--'}
+                        </span>
+                      </p>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-center py-4">
@@ -1267,7 +1297,13 @@ export default function App() {
           {activeTab === "updates" && <MarketNews />}
           {activeTab === "education" && <BlogSection />}
 
-          {activeTab === "billing" && <Billing onPurchase={handlePurchaseInitiated} />}
+          {activeTab === "billing" && (
+            <Billing 
+              onPurchase={handlePurchaseInitiated} 
+              currentPlanId={user?.planId}
+              isSubscribed={user?.isSubscribed}
+            />
+          )}
           
           {activeTab === "profile" && user && (
             <Profile 
