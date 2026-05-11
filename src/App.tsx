@@ -385,6 +385,8 @@ export default function App() {
       reader.onloadend = () => {
         const base64String = reader.result as string;
         setImage(base64String);
+        // Reset file input so selecting the same file again triggers onChange
+        e.target.value = '';
       };
       reader.readAsDataURL(file);
     }
@@ -428,7 +430,8 @@ export default function App() {
 
       // --- GLOBAL SIGNAL NEXUS SYNC ---
       try {
-        const queryRes = await fetch(`/api/signal-nexus/query?instrument=${encodeURIComponent(result.chartType)}&timeframe=${encodeURIComponent(result.timeframe)}`);
+        const instrumentId = result.instrumentSymbol || result.chartType;
+        const queryRes = await fetch(`/api/signal-nexus/query?instrument=${encodeURIComponent(instrumentId)}&timeframe=${encodeURIComponent(result.timeframe)}`);
         if (queryRes.ok) {
           const shared = await queryRes.json();
           const sharedResult = { ...shared.prediction, simulatedData: shared.data, isSharedConsensus: true };
@@ -438,7 +441,7 @@ export default function App() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              instrument: result.chartType,
+              instrument: instrumentId,
               timeframe: result.timeframe,
               prediction: result,
               data: result.simulatedData
@@ -1222,15 +1225,24 @@ export default function App() {
                   {analysis?.instrumentSymbol && (
                     <div className="h-[400px] border border-white/5 bg-black/20 rounded-xl overflow-hidden shadow-2xl relative z-10">
                       <AdvancedRealTimeChart
+                        key={analysis.instrumentSymbol + Date.now()}
                         theme={isDarkMode ? "dark" : "light"}
-                        symbol={analysis.instrumentSymbol}
+                        symbol={
+                          analysis.instrumentSymbol.includes(':') 
+                            ? analysis.instrumentSymbol 
+                            : (analysis.instrumentSymbol.includes('USD') || analysis.instrumentSymbol.includes('EUR') || analysis.instrumentSymbol.includes('XAU'))
+                              ? `OANDA:${analysis.instrumentSymbol}`
+                              : (analysis.instrumentSymbol.includes('BTC') || analysis.instrumentSymbol.includes('ETH'))
+                                ? `BINANCE:${analysis.instrumentSymbol}`
+                                : `NASDAQ:${analysis.instrumentSymbol}`
+                        }
                         interval="D"
                         timezone="Etc/UTC"
                         style="1"
                         locale="en"
                         enable_publishing={false}
                         allow_symbol_change={true}
-                        container_id={"tv_analysis_" + analysis.instrumentSymbol.replace(/[^a-zA-Z0-9]/g, '')}
+                        container_id={"tv_analysis_" + analysis.instrumentSymbol.replace(/[^a-zA-Z0-9]/g, '') + "_" + Date.now()}
                         hide_side_toolbar={false}
                         autosize={true}
                       />
