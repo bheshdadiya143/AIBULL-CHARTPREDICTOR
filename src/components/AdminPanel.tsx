@@ -1,19 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
-import { Users, FileText, CheckCircle, Database, ShieldAlert, Trash2 } from 'lucide-react';
+import { Users, FileText, CheckCircle, Database, ShieldAlert, Trash2, Activity, Download, MessageSquare } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 
 export default function AdminPanel({ user }: { user: any }) {
   const [users, setUsers] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'blogs' | 'reports'>('users');
+  const [signals, setSignals] = useState<any[]>([]);
+  const [supportQueries, setSupportQueries] = useState<any[]>([]);
+  const [livePrices, setLivePrices] = useState<Record<string, { price: number, high?: number, low?: number }>>({});
+  
+  const [activeTab, setActiveTab] = useState<'users' | 'blogs' | 'reports' | 'signals' | 'support'>('users');
   
   // Edit User Modal
   const [editingUser, setEditingUser] = useState<any>(null);
   const [editFreeUses, setEditFreeUses] = useState(0);
-  const [editProDays, setEditProDays] = useState(0); // 0 = no change, -1 = revoke, >0 = add days
+  const [editProDays, setEditProDays] = useState(0);
 
   // Blog form
   const [blogTitle, setBlogTitle] = useState('');
@@ -26,8 +30,83 @@ export default function AdminPanel({ user }: { user: any }) {
       fetchUsers();
     } else if (activeTab === 'reports') {
       fetchReports();
+    } else if (activeTab === 'signals') {
+      fetchSignals();
+    } else if (activeTab === 'support') {
+      fetchSupportQueries();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    // Only poll live prices if on signals tab and there are active signals
+    if (activeTab !== 'signals' || signals.length === 0) return;
+    
+    const fetchPrices = async () => {
+      const activeSymbols: string[] = Array.from(new Set(signals.filter(s => s.status === 'active').map(s => String(s.instrument))));
+      for (const symbol of activeSymbols) {
+        try {
+          const res = await fetch(`/api/price?symbol=${encodeURIComponent(symbol)}`);
+          if (res.ok) {
+            const data = await res.json();
+            setLivePrices(prev => ({ ...prev, [symbol]: { price: data.price, high: data.high, low: data.low } }));
+            
+            // Check TP / SL hit using OHLC (high/low) so we don't miss intra-period hits
+            const signalsForSymbol = signals.filter(s => s.status === 'active' && s.instrument === symbol);
+            for (const sig of signalsForSymbol) {
+               const bias = sig.analysis?.prediction?.bias;
+               const tp = parseFloat(sig.analysis?.prediction?.target);
+               const sl = parseFloat(sig.analysis?.prediction?.stopLoss);
+               
+               // Use High, Low if available, otherwise fallback to current price
+               const currentPrice = data.price;
+               const periodHigh = data.high || currentPrice;
+               const periodLow = data.low || currentPrice;
+               
+               let hitStatus = null;
+               if (bias === 'bullish' || bias === 'long') {
+                 if (periodHigh >= tp && tp > 0) hitStatus = 'tp_hit';
+                 else if (periodLow <= sl && sl > 0) hitStatus = 'sl_hit';
+               } else if (bias === 'bearish' || bias === 'short') {
+                 if (periodLow <= tp && tp > 0) hitStatus = 'tp_hit';
+                 else if (periodHigh >= sl && sl > 0) hitStatus = 'sl_hit';
+               }
+               
+               if (hitStatus) {
+                  await updateDoc(doc(db, "signals", sig.id), { status: hitStatus });
+                  fetchSignals(); // Refresh the list
+               }
+            }
+          }
+        } catch (e) {
+          console.error("Failed to fetch price for " + symbol, e);
+        }
+      }
+    };
+    
+    fetchPrices();
+    const interval = setInterval(fetchPrices, 900000); // Check every 15m as requested
+    return () => clearInterval(interval);
+  }, [activeTab, signals]);
+
+  const fetchSignals = async () => {
+    try {
+      const snap = await getDocs(collection(db, "signals"));
+      const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      setSignals(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, "signals");
+    }
+  };
+
+  const fetchSupportQueries = async () => {
+    try {
+      const snap = await getDocs(collection(db, "support_queries"));
+      const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+      setSupportQueries(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+    } catch (e) {
+      handleFirestoreError(e, OperationType.GET, "support_queries");
+    }
+  };
 
   const fetchUsers = async () => {
     try {
@@ -130,22 +209,22 @@ export default function AdminPanel({ user }: { user: any }) {
         <h2 className="text-xl font-bold uppercase tracking-widest text-white">Admin Dashboard</h2>
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex gap-2 lg:gap-4 overflow-x-auto no-scrollbar pb-2 mask-edges relative">
         <button 
           onClick={() => setActiveTab('users')}
-          className={`px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'users' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+          className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'users' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
         >
           <Users className="w-4 h-4 inline-block mr-2" /> User Database
         </button>
         <button 
           onClick={() => setActiveTab('blogs')}
-          className={`px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'blogs' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+          className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'blogs' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
         >
           <FileText className="w-4 h-4 inline-block mr-2" /> Post Blog
         </button>
         <button 
           onClick={() => setActiveTab('reports')}
-          className={`px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'reports' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+          className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'reports' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
         >
           <ShieldAlert className="w-4 h-4 inline-block mr-2" /> 
           Reports 
@@ -155,7 +234,121 @@ export default function AdminPanel({ user }: { user: any }) {
             </span>
           )}
         </button>
+        <button 
+          onClick={() => setActiveTab('signals')}
+          className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'signals' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+        >
+          <Activity className="w-4 h-4 inline-block mr-2" /> Live Signals
+        </button>
+        <button 
+          onClick={() => setActiveTab('support')}
+          className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold uppercase rounded-lg transition-colors ${activeTab === 'support' ? 'bg-blue-600 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+        >
+          <MessageSquare className="w-4 h-4 inline-block mr-2" /> 
+          Support 
+          {supportQueries.filter(q => q.status === 'open').length > 0 && (
+            <span className="ml-2 px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px]">
+              {supportQueries.filter(q => q.status === 'open').length}
+            </span>
+          )}
+        </button>
       </div>
+
+      {activeTab === 'signals' && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+          <div className="bg-[#0F1115] border border-white/10 rounded-xl overflow-x-auto">
+            <table className="w-full text-left text-sm text-slate-300 whitespace-nowrap">
+              <thead className="bg-white/5 text-xs uppercase text-slate-400 font-bold border-b border-white/10">
+                <tr>
+                  <th className="px-6 py-3">Timestamp / User</th>
+                  <th className="px-6 py-3">Pair / Symbol (ID)</th>
+                  <th className="px-6 py-3 text-center">Prediction (TF)</th>
+                  <th className="px-6 py-3 text-right">Entry</th>
+                  <th className="px-6 py-3 text-right">Live / Cmp</th>
+                  <th className="px-6 py-3 text-right">TP</th>
+                  <th className="px-6 py-3 text-right">SL</th>
+                  <th className="px-6 py-3 text-center">Status / Feedback</th>
+                  <th className="px-6 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {signals.map(s => {
+                  const p = s.analysis?.prediction || {};
+                  const live = livePrices[s.instrument];
+                  const bias = p.bias || 'neutral';
+                  const isLong = bias === 'bullish' || bias === 'long';
+                  const isShort = bias === 'bearish' || bias === 'short';
+                  
+                  return (
+                    <tr key={s.id} className="hover:bg-white/5 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="font-bold text-white text-xs">{new Date(s.createdAt?.seconds * 1000).toLocaleString()}</div>
+                        <div className="text-[10px] text-slate-500">{s.userName}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-mono font-bold text-blue-400">{s.instrument}</div>
+                        <div className="text-[9px] text-slate-500 font-mono mt-1">ID: {s.id}</div>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={cn(
+                          "px-2 py-1 rounded text-[10px] font-bold uppercase",
+                          isLong ? "bg-green-500/20 text-green-500" : isShort ? "bg-red-500/20 text-red-500" : "bg-slate-500/20 text-slate-400"
+                        )}>
+                          {bias} ({s.timeframe})
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right font-mono text-xs">{p.entry || p.limitPrice || '---'}</td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="font-mono text-xs text-yellow-400 font-bold">{live?.price || '---'}</div>
+                        {live?.high && live?.low && (
+                           <div className="text-[9px] text-slate-500 font-mono mt-1">H:{live.high.toFixed(2)} L:{live.low.toFixed(2)}</div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right font-mono text-xs text-green-400">{p.target || '---'}</td>
+                      <td className="px-6 py-4 text-right font-mono text-xs text-red-400">{p.stopLoss || '---'}</td>
+                      <td className="px-6 py-4 text-center flex flex-col items-center gap-1 mt-2">
+                        {s.status === 'active' && <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-[10px] rounded uppercase font-bold animate-pulse">Tracking</span>}
+                        {s.status === 'tp_hit' && <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-[10px] rounded uppercase font-bold">TP Hit 🏆</span>}
+                        {s.status === 'sl_hit' && <span className="px-2 py-0.5 bg-red-500/20 text-red-400 text-[10px] rounded uppercase font-bold">SL Hit ❌</span>}
+                        {s.status === 'closed' && <span className="px-2 py-0.5 bg-slate-500/20 text-slate-400 text-[10px] rounded uppercase font-bold">Closed</span>}
+                        
+                        {s.feedback && (
+                          <span className={cn(
+                            "px-1.5 py-0.5 mt-1 text-[9px] rounded uppercase font-bold",
+                            s.feedback === 'accurate' ? "bg-green-500/20 text-green-500" : "bg-red-500/20 text-red-500"
+                          )}>
+                            USER_FB: {s.feedback}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button 
+                          onClick={() => {
+                            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(s.analysis, null, 2));
+                            const dlAnchorElem = document.createElement('a');
+                            dlAnchorElem.setAttribute("href",     dataStr     );
+                            dlAnchorElem.setAttribute("download", `${s.instrument}_${s.timeframe}_analysis.json`);
+                            dlAnchorElem.click();
+                          }}
+                          className="p-1.5 bg-white/5 text-slate-300 rounded hover:bg-white/10 transition-colors"
+                          title="Download Full JSON Analysis"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+                {signals.length === 0 && (
+                   <tr>
+                     <td colSpan={9} className="px-6 py-8 text-center text-slate-500 italic">No signals generated yet.</td>
+                   </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </motion.div>
+      )}
 
       {activeTab === 'users' && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
@@ -293,6 +486,80 @@ export default function AdminPanel({ user }: { user: any }) {
               </tbody>
             </table>
           </div>
+        </motion.div>
+      )}
+
+      {activeTab === 'support' && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+          {supportQueries.map(q => (
+            <div key={q.id} className="bg-[#0F1115] border border-white/10 rounded-xl p-5 shadow-2xl relative flex flex-col items-start text-left">
+              <div className="flex items-start justify-between w-full mb-4">
+                <div>
+                  <h3 className="font-bold text-white text-sm">{q.name}</h3>
+                  <p className="text-xs text-slate-400 flex items-center gap-2">
+                    {q.email} {q.mobile && <span>• {q.mobile}</span>}
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded-full border ${q.status === 'open' ? 'border-red-500/30 text-red-400 bg-red-500/10' : 'border-green-500/30 text-green-400 bg-green-500/10'}`}>
+                    {q.status}
+                  </span>
+                  {q.status === 'open' && (
+                    <button 
+                      onClick={async () => {
+                        const newResponse = window.prompt("Enter your response to the user:");
+                        if (newResponse) {
+                          try {
+                            await updateDoc(doc(db, "support_queries", q.id), { 
+                               response: newResponse, 
+                               status: 'closed', 
+                               updatedAt: serverTimestamp() 
+                            });
+                            fetchSupportQueries();
+                          } catch (err) {
+                            handleFirestoreError(err, OperationType.UPDATE, "support_queries");
+                          }
+                        }
+                      }}
+                      className="px-3 py-1 bg-green-600 hover:bg-green-500 text-xs font-bold uppercase text-white rounded transition-colors"
+                    >
+                      Resolve
+                    </button>
+                  )}
+                  <button 
+                    onClick={async () => {
+                      if (window.confirm('Delete this query?')) {
+                        try {
+                           await deleteDoc(doc(db, "support_queries", q.id));
+                           fetchSupportQueries();
+                        } catch (err) {
+                           handleFirestoreError(err, OperationType.DELETE, "support_queries");
+                        }
+                      }
+                    }}
+                    className="p-1.5 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="bg-black/30 border border-white/5 p-4 rounded-lg text-sm text-slate-300 w-full">
+                <span className="text-xs font-bold uppercase text-slate-500 block mb-2">User Query:</span>
+                "{q.query}"
+              </div>
+              {q.response && (
+                <div className="mt-3 bg-blue-500/10 border border-blue-500/20 p-4 rounded-lg text-sm text-slate-200 w-full">
+                  <span className="text-xs font-bold uppercase text-blue-400 block mb-2">Admin Response:</span>
+                  "{q.response}"
+                </div>
+              )}
+            </div>
+          ))}
+          {supportQueries.length === 0 && (
+             <div className="bg-[#0F1115] border border-white/10 rounded-xl p-8 text-center text-slate-500 italic">
+               No support queries yet.
+             </div>
+          )}
         </motion.div>
       )}
 

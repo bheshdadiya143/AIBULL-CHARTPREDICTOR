@@ -48,6 +48,23 @@
         "status": { "type": "string", "enum": ["pending", "reviewed", "resolved"] }
       },
       "required": ["reporterId", "reason", "createdAt", "status"]
+    },
+    "support_query": {
+      "title": "Customer Support Query",
+      "description": "Queries submitted via the chatbot",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "mobile": { "type": "string" },
+        "query": { "type": "string" },
+        "response": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "closed"] },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["userId", "email", "name", "query", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -62,6 +79,10 @@
     "reports/{reportId}": {
       "schema": { "$ref": "#/entities/report" },
       "description": "Stores content reports"
+    },
+    "support_queries/{queryId}": {
+      "schema": { "$ref": "#/entities/support_query" },
+      "description": "Stores support queries from the chatbot"
     }
   }
 }

@@ -102,5 +102,64 @@ service cloud.firestore {
         && isValidReport(incoming());
       allow read, list, update, delete: if isAdmin();
     }
+
+    function isValidSignal(data) {
+      return data.keys().hasAll(['userId', 'userName', 'instrument', 'timeframe', 'analysis', 'status', 'createdAt'])
+        && data.userId is string && data.userId.size() <= 128
+        && data.userName is string && data.userName.size() <= 100
+        && data.instrument is string && data.instrument.size() <= 50
+        && data.timeframe is string && data.timeframe.size() <= 20
+        && data.analysis is map
+        && data.status in ['active', 'tp_hit', 'sl_hit', 'closed']
+        && data.createdAt is timestamp
+        && (data.keys().hasAny(['feedback']) ? (data.feedback in ['accurate', 'inaccurate']) : true);
+    }
+
+    match /signals/{signalId} {
+      allow create: if isSignedIn()
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && isValidSignal(incoming());
+      
+      allow read: if isSignedIn() && (request.auth.uid == resource.data.userId || isAdmin());
+      allow list: if isAdmin();
+      
+      allow update: if (isAdmin() 
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+        && incoming().status in ['active', 'tp_hit', 'sl_hit', 'closed'])
+        ||
+        (isSignedIn() && existing().userId == request.auth.uid 
+        && incoming().diff(existing()).affectedKeys().hasOnly(['feedback'])
+        && incoming().feedback in ['accurate', 'inaccurate']);
+      allow delete: if isAdmin();
+    }
+    function isValidSupportQuery(data) {
+      return data.keys().hasAll(['userId', 'email', 'name', 'query', 'status', 'createdAt', 'updatedAt'])
+        && data.userId is string && data.userId.size() <= 128
+        && data.email is string && data.email.size() <= 200
+        && data.name is string && data.name.size() <= 100
+        && data.query is string && data.query.size() <= 5000
+        && data.status in ['open', 'closed']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && (data.keys().hasAny(['mobile']) ? (data.mobile is string && data.mobile.size() <= 20) : true)
+        && (data.keys().hasAny(['response']) ? (data.response is string && data.response.size() <= 5000) : true);
+    }
+
+    match /support_queries/{queryId} {
+      allow create: if isSignedIn()
+        && isValidId(queryId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isValidSupportQuery(incoming());
+      allow update: if (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['response', 'status', 'updatedAt']) && incoming().updatedAt == request.time)
+        || (isSignedIn() && existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['query', 'updatedAt']) && incoming().updatedAt == request.time);
+      allow read: if isSignedIn() && (request.auth.uid == resource.data.userId || isAdmin());
+      allow list: if isAdmin();
+      allow delete: if isAdmin();
+    }
   }
 }

@@ -47,7 +47,7 @@ import { analyzeChartImage, ChartAnalysis } from "./services/geminiService";
 import { auth, db } from "./firebase";
 import { BillingService } from "./services/billingService";
 import { signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "firebase/auth";
-import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection } from "firebase/firestore";
+import { doc, setDoc, getDoc, updateDoc, serverTimestamp, collection, addDoc } from "firebase/firestore";
 import { cn } from "./lib/utils";
 
 // Sub-components
@@ -378,6 +378,32 @@ export default function App() {
     }
   };
 
+  const handleSignalFeedback = async (rating: 'accurate' | 'inaccurate') => {
+    setFeedback({ rating, submitted: true });
+    if (analysis?.signalId) {
+      try {
+        await updateDoc(doc(db, "signals", analysis.signalId), {
+          feedback: rating
+        });
+        
+        // Also update the local state so downloaded file has it
+        setAnalyses(prev => {
+          const current = prev[selectedTimeframe];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [selectedTimeframe]: {
+              ...current,
+              feedback: rating
+            }
+          };
+        });
+      } catch (err) {
+        console.error("Failed to save feedback", err);
+      }
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -424,30 +450,44 @@ export default function App() {
     try {
       const result = await analyzeChartImage(base64, tfToAnalyze);
 
+      // --- STORE SIGNAL TO DASHBOARD ---
+      try {
+        const docRef = await addDoc(collection(db, "signals"), {
+          userId: user.uid,
+          userName: user.name || user.email || 'Unknown User',
+          instrument: result.instrumentSymbol || result.chartType || 'Unknown',
+          timeframe: result.timeframe || tfToAnalyze,
+          analysis: result,
+          status: 'active',
+          createdAt: serverTimestamp()
+        });
+        result.signalId = docRef.id;
+      } catch (err) {
+        console.error("Failed to store signal:", err);
+      }
+
       // Store in multi-timeframe state
       const updatedAnalyses = { ...analyses, [tfToAnalyze]: result };
       setAnalyses(updatedAnalyses);
 
       // --- GLOBAL SIGNAL NEXUS SYNC ---
       try {
-        const instrumentId = result.instrumentSymbol || result.chartType;
-        const queryRes = await fetch(`/api/signal-nexus/query?instrument=${encodeURIComponent(instrumentId)}&timeframe=${encodeURIComponent(result.timeframe)}`);
-        if (queryRes.ok) {
-          const shared = await queryRes.json();
-          const sharedResult = { ...shared.prediction, simulatedData: shared.data, isSharedConsensus: true };
-          setAnalyses(prev => ({ ...prev, [tfToAnalyze]: sharedResult }));
-        } else {
-          await fetch("/api/signal-nexus/sync", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              instrument: instrumentId,
-              timeframe: result.timeframe,
-              prediction: result,
-              data: result.simulatedData
-            })
-          });
-        }
+        const instrumentId = result.instrumentSymbol || result.chartType || 'unknown';
+        await fetch("/api/signal-nexus/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instrument: instrumentId,
+            timeframe: result.timeframe,
+            prediction: result,
+            data: result.simulatedData
+          })
+        });
+        
+        // Mark as shared consensus locally but don't overwrite the fresh analysis
+        const finalResult = { ...result, isSharedConsensus: true };
+        setAnalyses(prev => ({ ...prev, [tfToAnalyze]: finalResult }));
+
       } catch (nexusErr) {
         console.warn("Nexus Sync Offline:", nexusErr);
       }
@@ -813,7 +853,7 @@ export default function App() {
             <NavItem icon={LayoutDashboard} tab="analysis" label="Analysis" />
             <NavItem icon={LineChart} tab="charts" label="Charts" />
             <NavItem icon={Maximize2} tab="education" label="Education" />
-            <NavItem icon={Newspaper} tab="updates" label="Updates" />
+            <NavItem icon={Newspaper} tab="updates" label="News Events" />
             <NavItem icon={CreditCard} tab="billing" label="Plans" />
             {user?.isAdmin && (
               <NavItem icon={Settings} tab="admin" label="Admin" />
@@ -1003,14 +1043,14 @@ export default function App() {
                               </p>
                               <div className="grid grid-cols-2 gap-2">
                                 <button 
-                                  onClick={() => setFeedback({ rating: 'accurate', submitted: true })}
+                                  onClick={() => handleSignalFeedback('accurate')}
                                   className="flex items-center justify-center gap-2 py-2.5 bg-white/5 border border-white/5 rounded-lg hover:border-green-500/50 hover:bg-green-500/5 transition-all group"
                                 >
                                   <ThumbsUp className="w-3.5 h-3.5 text-slate-500 group-hover:text-green-500" />
                                   <span className="text-[10px] font-bold uppercase text-slate-400 group-hover:text-white">Accurate</span>
                                 </button>
                                 <button 
-                                  onClick={() => setFeedback({ rating: 'inaccurate', submitted: true })}
+                                  onClick={() => handleSignalFeedback('inaccurate')}
                                   className="flex items-center justify-center gap-2 py-2.5 bg-white/5 border border-white/5 rounded-lg hover:border-red-500/50 hover:bg-red-500/5 transition-all group"
                                 >
                                   <ThumbsDown className="w-3.5 h-3.5 text-slate-500 group-hover:text-red-500" />
@@ -1230,11 +1270,15 @@ export default function App() {
                         symbol={
                           analysis.instrumentSymbol.includes(':') 
                             ? analysis.instrumentSymbol 
-                            : (analysis.instrumentSymbol.includes('USD') || analysis.instrumentSymbol.includes('EUR') || analysis.instrumentSymbol.includes('XAU'))
-                              ? `OANDA:${analysis.instrumentSymbol}`
-                              : (analysis.instrumentSymbol.includes('BTC') || analysis.instrumentSymbol.includes('ETH'))
-                                ? `BINANCE:${analysis.instrumentSymbol}`
-                                : `NASDAQ:${analysis.instrumentSymbol}`
+                            : (analysis.instrumentSymbol.toUpperCase().includes('NIFTYBANK') || analysis.instrumentSymbol.toUpperCase() === 'BANKNIFTY')
+                              ? `NSE:BANKNIFTY`
+                              : (analysis.instrumentSymbol.toUpperCase().includes('NIFTY') || analysis.instrumentSymbol.toUpperCase() === 'NIFTY50')
+                                ? `NSE:NIFTY`
+                                : (analysis.instrumentSymbol.includes('USD') || analysis.instrumentSymbol.includes('EUR') || analysis.instrumentSymbol.includes('XAU'))
+                                  ? `OANDA:${analysis.instrumentSymbol}`
+                                  : (analysis.instrumentSymbol.includes('BTC') || analysis.instrumentSymbol.includes('ETH'))
+                                    ? `BINANCE:${analysis.instrumentSymbol}`
+                                    : `NASDAQ:${analysis.instrumentSymbol}`
                         }
                         interval="D"
                         timezone="Etc/UTC"

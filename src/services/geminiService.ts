@@ -22,6 +22,8 @@ const safetySettings = [
 ];
 
 export interface ChartAnalysis {
+  signalId?: string;
+  feedback?: 'accurate' | 'inaccurate';
   chartType: string;
   timeframe: string;
   trend: "bullish" | "bearish" | "neutral";

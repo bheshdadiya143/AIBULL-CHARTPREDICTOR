@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { User, CreditCard, Save, Smartphone, Mail, Edit3, X, Zap } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import SupportChat from './SupportChat';
 
 interface ProfileProps {
   user: any;
@@ -180,6 +181,7 @@ export default function Profile({ user, onUpdateUser, onCancelSubscription, onUp
         </motion.div>
 
       </div>
+      <SupportChat user={user} />
     </div>
   );
 }
